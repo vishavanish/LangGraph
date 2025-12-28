@@ -52,3 +52,34 @@ LangGraph is a framework for building agentic AI systems, focusing on workflow o
 
 ## 12. Execution Model
 - Full orchestration cycle:
+
+
+# 🚀 LangGraph Workflow Execution Guide
+
+This section explains the complete lifecycle of a LangGraph workflow — from setup to execution.
+
+---
+
+## 📌 Steps
+
+### 1. Install & Import
+Install LangGraph and required libraries:
+```bash
+pip install langgraph langchain
+
+### 2 Define state
+
+
+### 3 Create graph
+
+### 4 Add nodes (tasks)
+
+### 5 Add edges (connections)
+
+### 6 Set entry point
+
+### 7 Compile graph
+
+### 8 Run workflow → get results
+```mark
+Take Example from area_reactangle_workflow.ipynb file
