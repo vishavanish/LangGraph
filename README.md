@@ -62,7 +62,7 @@ This section explains the complete lifecycle of a LangGraph workflow — from se
 
 ## 📌 Steps
 
-### 1. Install & Import
+### 1. Steps Here
 Install LangGraph and required libraries:
 ```bash
 pip install langgraph langchain
