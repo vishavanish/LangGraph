@@ -63,7 +63,7 @@ This section explains the complete lifecycle of a LangGraph workflow — from se
 ## 📌 Steps
 
 ### 1. Steps Here
-Install LangGraph and required libraries:
+
 ```bash
 pip install langgraph langchain
 
@@ -83,3 +83,12 @@ pip install langgraph langchain
 ### 8 Run workflow → get results
 ```mark
 Take Example from area_reactangle_workflow.ipynb file
+
+
+--------  Types Of Workflow -------------------
+# 🚀 Types of Workflow Guide
+
+---
+
+## Squenctial Workflow
+### Parallel Workflow
