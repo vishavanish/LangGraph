@@ -20,6 +20,7 @@ import dotenv
 dotenv.load_dotenv() 
 # -------------google model----------------
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY","")
+print(os.getenv("GOOGLE_API_KEY",""))
 model  = init_chat_model("google_genai:gemini-3-flash-preview")
 
 # ______________ Hugging face model-------------------
