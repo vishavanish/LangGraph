@@ -14,7 +14,8 @@ from langchain.chat_models import init_chat_model
 import sqlite3
 from langgraph.checkpoint.sqlite import SqliteSaver
 import os , json, sys
-from langchain_core.messages import BaseMessage, HumanMessage , AIMessageChunk, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage , AIMessageChunk, ToolMessage, SystemMessage
+
 from fastapi.responses import StreamingResponse
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langgraph.prebuilt import ToolNode , tools_condition
@@ -25,9 +26,17 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
+from langchain_core.runnables import RunnableConfig
 from langchain_community.vectorstores import FAISS
+import requests
+
+
+
 dotenv.load_dotenv() 
-# -------------google model----------------
+APIFY_TOKEN = os.getenv("APIFY_TOKEN")
+INDEED_ACTOR = "misceres~indeed-scraper"
+NAUKRI_ACTOR = "louisdeconinck~naukri-job-scraper"
+# # -------------google model----------------
 # os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY","")
 # model  = init_chat_model("google_genai:gemini-2.0-flash-lite")
 # embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
@@ -42,7 +51,7 @@ llm = HuggingFaceEndpoint(
 )
 model = ChatHuggingFace(llm=llm)
 embeddings = HuggingFaceEmbeddings(
-    model_name="Qwen/Qwen3-Embedding-0.6B"  #model_name="sentence-transformers/paraphrase-albert-small-v2"
+    model_name="sentence-transformers/paraphrase-albert-small-v2"  #jdr3"Qwen/Qwen3-Embedding-0.6B"  #model_name="sentence-transformers/paraphrase-albert-small-v2"
 )
         
 app = FastAPI()
@@ -65,7 +74,7 @@ _THREAD_METADATA: Dict[str, dict] = {}
 
 
 def _get_retriever(thread_id: Optional[str]):
-    return None
+    return _THREAD_RETRIEVERS.get(str(thread_id))
 
 
 def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None) -> dict:
@@ -172,6 +181,98 @@ def calculator(first_num: float, second_num: float, operation: str) -> dict:
         return {"error": str(e)}
 
 
+
+def _run_apify_actor(actor_id: str, payload: dict) -> list[dict]:
+    url = f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items"
+    resp = requests.post(url, params={"token": APIFY_TOKEN}, json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _search_indeed(position: str, location: str, max_items: int) -> list[dict]:
+    items = _run_apify_actor(INDEED_ACTOR, {
+        "position": position,
+        "location": location,
+        "maxItems": max_items,
+        "country": "IN",
+    })
+    return [
+        {
+            "source": "Indeed",
+            "title": it.get("positionName"),
+            "company": it.get("company"),
+            "location": it.get("location"),
+            "salary": it.get("salary"),
+            "apply_url": it.get("externalApplyLink") or it.get("url"),
+        }
+        for it in items
+    ]
+
+
+def _search_naukri(position: str, location: str, max_items: int) -> list[dict]:
+    items = _run_apify_actor(NAUKRI_ACTOR, {
+        "keywords": [position],
+        "maxItems": max_items,
+    })
+    return [
+        {
+            "source": "Naukri",
+            "title": it.get("title") or it.get("jobTitle"),
+            "company": it.get("company") or it.get("companyName"),
+            "location": it.get("location") or it.get("placeholders", {}).get("location"),
+            "salary": it.get("salary"),
+            "apply_url": it.get("jobUrl") or it.get("url"),
+        }
+        for it in items
+    ]
+
+
+@tool
+def find_matching_jobs(config: RunnableConfig, max_items: int = 10) -> dict:
+    """
+    Search Indeed and Naukri for jobs matching the user's uploaded resume.
+    Use this when the user asks to find jobs, see openings, or match jobs to their resume.
+    """
+    thread_id = config["configurable"]["thread_id"]
+
+    retriever = _get_retriever(thread_id)
+    if retriever is None:
+        return {"error": "No resume indexed for this chat. Upload a resume PDF first."}
+
+    docs = retriever.invoke("job title, core skills, years of experience, tech stack")
+    resume_snippet = "\n".join(d.page_content for d in docs)
+
+    prompt = (
+        "From this resume text, output ONLY strict JSON like "
+        '{"position": "...", "location": "..."}. '
+        "Position should be a short job title/role search term.\n\n"
+        f"{resume_snippet}"
+    )
+    result = model.invoke(prompt)
+    try:
+        terms = json.loads(extract_text(result.content))
+    except Exception:
+        terms = {"position": "Software Developer", "location": "India"}
+
+    position = terms["position"]
+    location = terms.get("location", "India")
+
+    jobs = []
+    errors = []
+
+    try:
+        jobs += _search_indeed(position, location, max_items)
+    except Exception as e:
+        errors.append(f"Indeed: {e}")
+
+    try:
+        jobs += _search_naukri(position, location, max_items)
+    except Exception as e:
+        errors.append(f"Naukri: {e}")
+
+    return {"search_terms": terms, "job_count": len(jobs), "jobs": jobs, "errors": errors}
+
+
 @tool
 def get_stock_price(symbol: str) -> dict:
     """
@@ -187,22 +288,18 @@ def get_stock_price(symbol: str) -> dict:
 
 
 @tool
-def rag_tool(query: str, thread_id: Optional[str] = None) -> dict:
+def rag_tool(query: str, config: RunnableConfig) -> dict:
     """
     Retrieve relevant information from the uploaded PDF for this chat thread.
-    Always include the thread_id when calling this tool.
     """
+    thread_id = config["configurable"]["thread_id"]
     retriever = _get_retriever(thread_id)
     if retriever is None:
-        return {
-            "error": "No document indexed for this chat. Upload a PDF first.",
-            "query": query,
-        }
+        return {"error": "No document indexed for this chat. Upload a PDF first.", "query": query}
 
     result = retriever.invoke(query)
     context = [doc.page_content for doc in result]
     metadata = [doc.metadata for doc in result]
-
     return {
         "query": query,
         "context": context,
@@ -211,7 +308,7 @@ def rag_tool(query: str, thread_id: Optional[str] = None) -> dict:
     }
 
 
-tools = [search_tool, get_stock_price, calculator, rag_tool]
+tools = [search_tool, get_stock_price, calculator, rag_tool,find_matching_jobs]
 llm_with_tools = model.bind_tools(tools)
 
 # State
@@ -226,14 +323,23 @@ class ChatRequest(BaseModel):
 
 
 # Node
-def chat_node(state: ChatState):
-    messages = state["messages"]
+def chat_node(state: ChatState, config):
+    thread_id = config["configurable"]["thread_id"]
+    has_doc = str(thread_id) in _THREAD_RETRIEVERS
 
+    sys_msg = SystemMessage(content=(
+        "You have a tool called rag_tool that retrieves content from the user's uploaded resume/PDF for this chat thread. "
+        + ("A document IS indexed for this thread — call rag_tool whenever the user asks about their background, "
+           "company history, experience, skills, or anything that could be in their resume."
+           if has_doc else
+           "No document is indexed for this thread yet.")
+    ))
+
+    messages = [sys_msg] + state["messages"]
     response = llm_with_tools.invoke(messages)
+    return {"messages": state["messages"] + [response]}
 
-    return {
-        "messages": messages + [response]
-    }
+
 
 tool_node = ToolNode(tools)
 
@@ -292,9 +398,15 @@ async def chat(request: ChatRequest):
                         yield f"data: {json.dumps({'delta': content})}\n\n"
 
                 elif isinstance(message_chunk, ToolMessage):
-                    # Emit tool result when tool finishes
-                    yield f"data: {json.dumps({'tool_result': message_chunk.name, 'output': str(message_chunk.content)})}\n\n"
+                    content = message_chunk.content
+                    # Tool content may already be a dict/list (from your @tool functions) or a string
+                    if isinstance(content, str):
+                        try:
+                            content = json.loads(content)
+                        except (json.JSONDecodeError, TypeError):
+                            pass  # leave as plain string, e.g. rag_tool error messages
 
+                    yield f"data: {json.dumps({'tool_result': message_chunk.name, 'output': content})}\n\n"
             print("[GENERATOR DONE]")
             yield "data: [DONE]\n\n"
 
