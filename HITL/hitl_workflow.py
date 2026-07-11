@@ -38,16 +38,22 @@ def book_flight(state):
     }
     
 
+from langchain_core.messages import AIMessage
+
 def confirm_booking(state):
+    booking = state["booking"]
 
     if state["human_response"].lower() == "yes":
-        state["booking"]["status"] = "Confirmed"
+        booking["status"] = "Confirmed"
         return {
-            "message": "✅ Flight booked successfully."
+            "booking": booking,
+            "messages": [AIMessage(content="✅ Flight booked successfully.")]
         }
 
+    booking["status"] = "no"
     return {
-        "message": "❌ Booking cancelled."
+        "booking": booking,
+        "messages": [AIMessage(content="❌ Flight booking cancelled.")]
     }
     
     
@@ -160,7 +166,7 @@ def main():
         if "messages" in result:
             print("AI:", get_ai_text(result["messages"][-1]))
 
-        print("------" * 40)
+        print("--" * 40)
         
 if __name__ == "__main__":
     main()
