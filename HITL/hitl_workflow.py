@@ -160,7 +160,7 @@ def main():
         if "messages" in result:
             print("AI:", get_ai_text(result["messages"][-1]))
 
-        print("-" * 40)
+        print("------" * 40)
         
 if __name__ == "__main__":
     main()
